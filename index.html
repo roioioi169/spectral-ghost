@@ -1,0 +1,94 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Spectral Ghost: Prototype</title>
+<style>
+  body { background:#0b0b0d; color:#eee; font:14px system-ui, sans-serif; margin:24px; }
+  h1 { font-size:18px; letter-spacing:.08em; margin:0 0 16px; }
+  .row { display:flex; align-items:center; gap:12px; margin:8px 0; }
+  .row label { width:150px; }
+  .row input[type=range] { width:260px; }
+  .row span { width:48px; text-align:right; font-variant-numeric:tabular-nums; color:#8fd; }
+  button { background:#1a1a1f; color:#eee; border:1px solid #444; padding:8px 14px; cursor:pointer; }
+  button.on { border-color:#8fd; color:#8fd; }
+  .note { color:#888; margin-top:20px; font-size:12px; }
+</style>
+</head>
+<body>
+<h1>SPECTRAL GHOST</h1>
+<button id="start">Start audio</button>
+<input type="file" id="file" accept="audio/*" disabled>
+<button id="mic" disabled>Use mic</button>
+<button id="swap" disabled>Swap: off</button>
+<div id="controls"></div>
+<p class="note">Serve over HTTP (python3 -m http.server), not file://. Audio starts from a click.</p>
+
+<script>
+const PARAMS = [
+  { name: 'sensitivity', label: 'Split sensitivity', min: 0.2, max: 4, step: 0.01, value: 1 },
+  { name: 'bias',        label: 'Tonal / noise bias', min: -1, max: 1, step: 0.01, value: 0 },
+  { name: 'bite',        label: 'Transient: Bite',   min: 0, max: 1, step: 0.01, value: 0 },
+  { name: 'drift',       label: 'Harmonic: Drift',   min: 0, max: 1, step: 0.01, value: 0 },
+  { name: 'crossMod',    label: 'Cross-mod duck',    min: 0, max: 1, step: 0.01, value: 0 },
+  { name: 'mix',         label: 'Wet / dry mix',     min: 0, max: 1, step: 0.01, value: 1 },
+];
+
+let ctx, ghost, source, swapOn = false;
+const controls = document.getElementById('controls');
+
+for (const p of PARAMS) {
+  const row = document.createElement('div');
+  row.className = 'row';
+  row.innerHTML = `<label>${p.label}</label><input type="range" min="${p.min}" max="${p.max}" step="${p.step}" value="${p.value}"><span>${p.value}</span>`;
+  const [, input, out] = row.children;
+  input.oninput = () => {
+    out.textContent = (+input.value).toFixed(2);
+    if (ghost) ghost.parameters.get(p.name).value = +input.value;
+  };
+  controls.appendChild(row);
+}
+
+document.getElementById('start').onclick = async () => {
+  if (ctx) return;
+  ctx = new AudioContext();
+  await ctx.audioWorklet.addModule('src/spectral-ghost-worklet.js');
+  ghost = new AudioWorkletNode(ctx, 'spectral-ghost', { outputChannelCount: [2] });
+  ghost.connect(ctx.destination);
+  for (const [i, p] of PARAMS.entries()) {
+    ghost.parameters.get(p.name).value = p.value;
+  }
+  document.getElementById('start').textContent = 'Audio running';
+  document.getElementById('file').disabled = false;
+  document.getElementById('mic').disabled = false;
+  document.getElementById('swap').disabled = false;
+};
+
+document.getElementById('file').onchange = async (e) => {
+  const file = e.target.files[0];
+  if (!file) return;
+  const buf = await ctx.decodeAudioData(await file.arrayBuffer());
+  if (source) source.stop();
+  source = ctx.createBufferSource();
+  source.buffer = buf;
+  source.loop = true;
+  source.connect(ghost);
+  source.start();
+};
+
+document.getElementById('mic').onclick = async () => {
+  const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+  if (source) source.stop?.();
+  source = ctx.createMediaStreamSource(stream);
+  source.connect(ghost);
+};
+
+document.getElementById('swap').onclick = (e) => {
+  swapOn = !swapOn;
+  ghost.parameters.get('swap').value = swapOn ? 1 : 0;
+  e.target.textContent = 'Swap: ' + (swapOn ? 'on' : 'off');
+  e.target.classList.toggle('on', swapOn);
+};
+</script>
+</body>
+</html>
